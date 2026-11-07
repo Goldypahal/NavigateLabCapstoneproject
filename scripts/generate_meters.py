@@ -58,6 +58,27 @@ BASE_WATER = {
 }
 
 
+def get_shift_assignment(ts: datetime.datetime) -> tuple[datetime.date, str, int]:
+    """
+    Industrial shift accounting: night shift runs 22:00 to 06:00 next day.
+    Hours 00:00–05:59 belong to the previous calendar day's night shift.
+    """
+    hour = ts.hour
+    if 6 <= hour < 14:
+        shift = "day"
+        shift_date = ts.date()
+    elif 14 <= hour < 22:
+        shift = "evening"
+        shift_date = ts.date()
+    elif hour >= 22:
+        shift = "night"
+        shift_date = ts.date()
+    else:  # hour < 6
+        shift = "night"
+        shift_date = (ts - datetime.timedelta(days=1)).date()
+    return shift_date, shift, shift_date.weekday()
+
+
 def generate_energy_csv(
     start_date: datetime.date,
     n_weeks: int,
@@ -88,33 +109,25 @@ def generate_energy_csv(
         hour = current.hour
         minute = current.minute
 
-        # Determine shift
-        if 6 <= hour < 14:
-            shift = "day"
-        elif 14 <= hour < 22:
-            shift = "evening"
-        else:
-            shift = "night"
+        # Determine shift using industrial shift assignment
+        shift_date, shift, shift_weekday = get_shift_assignment(current)
 
         base = BASE_KWH[shift]
         noise = float(rng.normal(0, base * 0.05))  # 5% noise
         kwh = max(0.1, base + noise)
 
-        # Apply anomalies
-        date = current.date()
-        weekday = date.weekday()  # 0=Mon, 6=Sun
-
-        # Anomaly 1: Tuesday nights +30%
-        if (anom1_start <= date < anom1_end and weekday == 1 and shift == "night"):
+        # Apply anomalies strictly to the unified shift window:
+        # Anomaly 1: Tuesday nights +30% (entire 22:00 Tue to 06:00 Wed shift)
+        if anom1_start <= shift_date < anom1_end and shift_weekday == 1 and shift == "night":
             kwh *= 1.30 + float(rng.uniform(0, 0.05))
 
         # Anomaly 2: Sunday day idle run (+60% — machine left on)
-        elif (anom2_start <= date < anom2_end and weekday == 6 and shift == "day"):
+        elif anom2_start <= shift_date < anom2_end and shift_weekday == 6 and shift == "day":
             kwh *= 1.60 + float(rng.uniform(0, 0.1))
 
         # Anomaly 3: Gradual evening drift
-        elif (anom3_start <= date < anom3_end and shift == "evening"):
-            days_into = (date - anom3_start).days
+        elif anom3_start <= shift_date < anom3_end and shift == "evening":
+            days_into = (shift_date - anom3_start).days
             drift = 1.0 + 0.005 * days_into   # 0.5% per day, up to ~15%
             kwh *= min(drift, 1.18)
 
