@@ -1,0 +1,65 @@
+{
+  "seed": 42,
+  "weeks": 8,
+  "start_date": "2026-09-12",
+  "energy_anomalies": [
+    {
+      "anomaly_id_prefix": "E-",
+      "type": "energy",
+      "description": "Night shift compressor overrun + air-line leak",
+      "affected_dates": [
+        "2026-10-13",
+        "2026-10-20"
+      ],
+      "shift": "night",
+      "expected_deviation_pct": 30,
+      "equipment": "Compressor-AX200",
+      "note": "Tuesday nights in weeks 5-6"
+    },
+    {
+      "anomaly_id_prefix": "E-",
+      "type": "energy",
+      "description": "Weekend idle machine run",
+      "affected_dates": [
+        "2026-10-25"
+      ],
+      "shift": "day",
+      "expected_deviation_pct": 60,
+      "equipment": "Line-1",
+      "note": "Sunday day shift in week 7 \u2014 machine not shut down"
+    },
+    {
+      "anomaly_id_prefix": "E-",
+      "type": "energy",
+      "description": "Gradual motor aging drift on evening shift",
+      "affected_dates": "weeks 6-8 evening",
+      "shift": "evening",
+      "expected_deviation_pct": "5-15 (gradual)",
+      "equipment": "Line-2",
+      "note": "Creeping increase \u2014 aging motor"
+    }
+  ],
+  "water_anomalies": [
+    {
+      "type": "water",
+      "description": "Cooling tower dripping valve \u2014 +18 kL/day unaccounted",
+      "affected_dates": "days 42\u201356",
+      "expected_unaccounted_kl_per_day": 18,
+      "note": "14-day event"
+    },
+    {
+      "type": "water",
+      "description": "Metering conflict \u2014 discharge > intake (physically impossible)",
+      "affected_dates": "day 30",
+      "expected_unaccounted_kl_per_day": "negative (conflict)",
+      "note": "Should be flagged as W-CONFLICT"
+    },
+    {
+      "type": "water",
+      "description": "Gradual unaccounted water drift (slow leak)",
+      "affected_dates": "days 20\u201341",
+      "expected_unaccounted_kl_per_day": "0.5 \u00d7 days_in (gradual)",
+      "note": "Increasing pattern \u2014 may cross threshold mid-window"
+    }
+  ]
+}

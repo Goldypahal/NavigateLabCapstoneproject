@@ -1,0 +1,21 @@
+[Granularity Mismatch Bug Log - Mistake 5]
+
+Module: backend/calc/energy.py -> run_energy_analysis()
+Date Identified: 2026-11-07
+Trigger: Unit test test_run_energy_analysis_no_false_positives_on_clean_data
+
+Trace Output:
+E       AssertionError: assert 165 == 0
+E        +  where 165 = len([EnergyAnomaly(anomaly_id='E-2026-01-02-DAY', actual_kwh=592.0, baseline_kwh=18.5, deviation_pct=3100.0, ...)])
+
+Root Cause Analysis:
+- `shift_agg` aggregated 15-minute readings to shift totals (sum = 32 readings * 18.5 kWh = 592.0 kWh).
+- `compute_baseline` was passed `df_for_baseline = df.copy()`, which contained raw 15-minute intervals (mean = 18.5 kWh).
+- Arithmetic compared shift-total actual (592.0 kWh) against interval baseline (18.5 kWh).
+- Resulting false deviation: (592.0 - 18.5) / 18.5 * 100 = 3100%, causing every single normal period to be flagged as an anomaly.
+
+Resolution:
+- Changed `df_for_baseline` to point to `shift_agg`.
+- Now comparing shift-total actual against historical shift-total baseline (mean = 592.0 kWh, deviation = 0.0%).
+- All 36 unit tests passed cleanly after fix.
+

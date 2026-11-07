@@ -1,0 +1,80 @@
+# ResourceLens — Evidence & Audit Trail of Proofs
+
+This document collects audit links, verification logs, and evidence of implementation for all project criteria under Problem Statement 22 (ResourceLens).
+
+---
+
+## 1. Multimodal Intake (3 Inputs) & Outputs (2 Outputs)
+- **Input 1: Meter Readings CSV (Text)**
+  - Schema validator: `backend/ingest/csv_validator.py`
+  - Energy readings generated: `data/energy_readings.csv` (5,376 rows, 15-min intervals)
+  - Water readings generated: `data/water_readings.csv` (56 daily balance rows)
+  - Verified by tests: `backend/tests/test_csv_validator.py`
+
+- **Input 2: Inspection Sheets & Nameplates (Image)**
+  - Vision processing: `backend/ai/vision.py` via `backend/nexus_client.py:extract_sheet_vision`
+  - Field confidence extraction with manual confirmation threshold (<0.7)
+  - Evidence logging with `IMG-xx` source IDs
+
+- **Input 3: Operator Voice Notes (Audio)**
+  - STT processing: `backend/ai/stt.py` via `backend/nexus_client.py:transcribe_audio`
+  - Segment-level timestamp alignment
+  - Evidence logging with `VN-xx` source IDs
+
+- **Output 1: Prioritised Action List (Text)**
+  - Code ranking: `backend/calc/cost.py:rank_actions_by_loss`
+  - Human review workflow: `backend/review/approval.py` & `backend/routes/review.py`
+  - Decision audit log table: `approvals`
+
+- **Output 2: Shift Audio Briefing (Audio)**
+  - TTS synthesis: `backend/ai/tts.py` via `backend/nexus_client.py:synthesise_briefing`
+  - Enforced constraint: generated strictly from approved actions
+
+---
+
+## 2. Hard Rule Safeguards & Enforcements
+- **Rule 1: AI Never Computes Numbers**
+  - Enforcement: LLM output schema contains no numeric fields.
+  - Regex validator: `_validate_llm_output()` strips numbers and flags violations.
+  - Calculations performed strictly in `backend/calc/energy.py`, `backend/calc/water.py`, and `backend/calc/cost.py`.
+
+- **Rule 2: AI Never Controls Equipment**
+  - Enforcement: The application contains zero control/dispatch interfaces.
+  - System prompt rule 2 & injection filter blocks device command patterns ("turn off", "switch on", "bypass valve").
+
+- **Rule 3: AI Never Claims Cause Without Evidence**
+  - Enforcement: Every `source_id` is validated against the active evidence store.
+  - Substring check: Every quote must be a verbatim substring in the source text.
+  - Automatic downgrade to `cause_status = "unknown"` on validation failure.
+
+---
+
+## 3. Calculation Validity & Hand Verification
+- Energy:
+  - Baseline: 4-week same-shift same-weekday historical mean.
+  - Excess kWh = actual - baseline.
+  - Tested: `backend/tests/test_calc_energy.py` (all tests passing).
+- Water Balance:
+  - Equation: `unaccounted = intake - process - discharge`.
+  - Anomaly condition: `unaccounted > threshold_kl` (5.0 kL/day default).
+  - Tested: `backend/tests/test_calc_water.py` (all tests passing).
+- Cost Formulas:
+  - Energy: `excess_kwh * 7.5 ₹/kWh` (off-peak) / `9.0 ₹/kWh` (ToD peak).
+  - Water: `excess_kl * 45.0 ₹/kL`.
+  - Tested: verified against manual calculation in `test_calc_water.py`.
+
+---
+
+## 4. Prompt Injection Test Results (A–F)
+All 10 injection vectors documented in `PROMPTS.md` tested against the sanitisation layer:
+- Delimited boundary: `<<<UNTRUSTED_DATA_START>>> ... <<<UNTRUSTED_DATA_END>>>`
+- Allowlisted Pydantic response format
+- Code-enforced threshold protection
+
+---
+
+## 5. Token Usage & Optimization
+- Single API gateway: `backend/nexus_client.py:_log_usage()` records tokens, latency, and status in `token_usage` table.
+- Sha-256 file hash cache avoids duplicate calls for identical images and audio.
+- Compact prompts (v1 -> v2 -> v3) documented in `PROMPTS.md`.
+

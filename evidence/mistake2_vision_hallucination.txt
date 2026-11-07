@@ -1,0 +1,27 @@
+[Raw Vision OCR output on blurred photo test]
+
+Input File: evidence/samples/blurred_inspection_sheet.jpg (blurry test capture)
+Raw Vision Output:
+{
+  "fields": {
+    "Equipment": "Compressor AX-200",
+    "Pressure_PSI": "125.4",
+    "Status": "Normal Operation",
+    "Oil_Level": "Full"
+  },
+  "confidence": {
+    "Equipment": 0.88,
+    "Pressure_PSI": 0.82,
+    "Status": 0.79,
+    "Oil_Level": 0.85
+  }
+}
+
+Problem Observed:
+- Image was intentionally blurred such that numbers were illegible to human eye.
+- Vision model hallucinated plausible numbers with unwarranted high confidence (>0.75).
+
+Fix Applied:
+- Added prompt instruction to strictly penalize confidence on blurry images (<0.4).
+- Added UI low-confidence highlight and forced human confirmation before values can be used in downstream evidence store.
+

@@ -1,0 +1,54 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+.nexus_cache/
+backend/.nexus_cache/
+
+# Uploads / generated audio
+backend/uploads/
+backend/audio_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Eval results (keep structure, ignore outputs)
+eval/results/*.json
+eval/results/*.csv
+
+# Evidence (committed manually)
+# evidence/ — keep committed
+

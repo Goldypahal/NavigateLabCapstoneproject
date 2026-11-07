@@ -1,0 +1,18 @@
+[STT Timestamp Drift Log - Mistake 4]
+
+Test File: voice_note_noisy_factory_floor.wav
+Audio Duration: 24.5 seconds
+
+Expected Segment (Human Listening):
+- [00:08 - 00:14]: "compressor air line was hissing near valve four"
+
+Nexus STT Raw Output:
+- [00:01 - 00:06]: "compressor air line was hissing near valve four" (shifted by ~7 seconds due to early machine hum false-trigger)
+
+Impact:
+- LLM locator citing "00:01-00:06" pointed to background air compressor rumble, not the spoken sentence.
+
+Remediation:
+- Locator schema changed from millisecond precision to segment index with approximate human-readable timestamp, e.g. "Segment 2 (~00:08)".
+- Review UI includes the full segment transcript alongside the audio player for verification.
+

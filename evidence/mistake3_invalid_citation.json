@@ -1,0 +1,28 @@
+{
+  "test_id": "MISTAKE-03-VERIFICATION",
+  "anomaly_id": "E-2026-11-04-DAY",
+  "hallucinated_output": {
+    "likely_cause": "Line 1 bearing overheating",
+    "cause_status": "supported",
+    "evidence": [
+      {
+        "source_id": "VN-99",
+        "type": "audio",
+        "locator": "01:10-01:25",
+        "quote": "bearing temperature exceeded 85C on motor 3"
+      }
+    ],
+    "uncertainty_note": "Based on VN-99"
+  },
+  "evidence_store_contents": [
+    "VN-01",
+    "VN-02",
+    "IMG-01"
+  ],
+  "validator_intercept": {
+    "source_id_exists": false,
+    "quote_in_source": false,
+    "action_taken": "Citation dropped; cause_status downgraded to 'unknown'"
+  }
+}
+

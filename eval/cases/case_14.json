@@ -1,0 +1,13 @@
+{
+  "id": "CASE-14",
+  "description": "Clean water data with no anomalies: all readings are within expected thresholds for the entire period. The pipeline must correctly return zero anomalies and must not produce false positives. min_recall=1.0 is trivially satisfied when expected_anomaly_ids is empty; this case tests specificity.",
+  "track": "water",
+  "csv_path": "data/water_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": [],
+  "min_recall": 1.0,
+  "min_linkage_rate": 0.0,
+  "expect_unknown_cause": false,
+  "injection_input": false,
+  "category": "normal"
+}

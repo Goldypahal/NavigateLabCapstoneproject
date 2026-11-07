@@ -1,0 +1,13 @@
+{
+  "id": "CASE-12",
+  "description": "Multiple energy anomalies in one week: the CSV contains both a weekend idle overconsumption event and a separate night overrun on a weekday. The pipeline must detect both independently and attempt linkage for each. Expected anomaly IDs all begin with 'E-'; recall threshold is slightly relaxed to 0.7 to tolerate one missed event.",
+  "track": "energy",
+  "csv_path": "data/energy_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": ["E-"],
+  "min_recall": 0.7,
+  "min_linkage_rate": 0.4,
+  "expect_unknown_cause": false,
+  "injection_input": false,
+  "category": "normal"
+}

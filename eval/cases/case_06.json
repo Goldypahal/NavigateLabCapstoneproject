@@ -1,0 +1,13 @@
+{
+  "id": "CASE-06",
+  "description": "Noisy voice recording scenario (simulated). The voice note transcript is heavily degraded with filler noise tokens and partial words, reducing confidence in the extracted cause. The pipeline should still attempt linkage but confidence will be low; min_linkage_rate reflects the degraded quality.",
+  "track": "energy",
+  "csv_path": "data/energy_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": ["E-"],
+  "min_recall": 0.8,
+  "min_linkage_rate": 0.2,
+  "expect_unknown_cause": false,
+  "injection_input": false,
+  "category": "noisy_audio"
+}

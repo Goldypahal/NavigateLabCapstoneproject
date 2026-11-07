@@ -1,0 +1,13 @@
+{
+  "id": "CASE-03",
+  "description": "Energy anomaly with no supporting evidence files. The CSV contains a clear spike but no voice notes or inspection sheets are provided. The pipeline should still detect the anomaly but must flag the cause as unknown due to missing evidence.",
+  "track": "energy",
+  "csv_path": "data/energy_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": ["E-"],
+  "min_recall": 0.8,
+  "min_linkage_rate": 0.0,
+  "expect_unknown_cause": true,
+  "injection_input": false,
+  "category": "missing_evidence"
+}

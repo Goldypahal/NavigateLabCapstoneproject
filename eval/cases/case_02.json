@@ -1,0 +1,13 @@
+{
+  "id": "CASE-02",
+  "description": "Normal water scenario: cooling tower leak detected via elevated flow differential between intake and discharge meters. Voice note from operator describes visible drip at tower base. Expect at least one water anomaly linked to the note.",
+  "track": "water",
+  "csv_path": "data/water_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": ["W-"],
+  "min_recall": 0.8,
+  "min_linkage_rate": 0.6,
+  "expect_unknown_cause": false,
+  "injection_input": false,
+  "category": "normal"
+}

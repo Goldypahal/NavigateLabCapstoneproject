@@ -1,0 +1,13 @@
+{
+  "id": "CASE-07",
+  "description": "Malformed CSV scenario: the input file is missing the required 'kwh' column entirely. The pipeline's CSV validation step must catch this structural error, return a validation failure, and produce zero anomalies. No evidence linkage should be attempted on invalid input.",
+  "track": "energy",
+  "csv_path": "data/bad_energy.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": [],
+  "min_recall": 1.0,
+  "min_linkage_rate": 0.0,
+  "expect_unknown_cause": false,
+  "injection_input": false,
+  "category": "malformed"
+}

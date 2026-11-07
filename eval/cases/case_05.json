@@ -1,0 +1,13 @@
+{
+  "id": "CASE-05",
+  "description": "Blurry inspection sheet photo scenario (simulated by empty evidence_files list). The pipeline receives no readable image content and must fall back to unknown cause. Anomaly detection should still succeed from CSV data alone; linkage must be zero because no legible evidence exists.",
+  "track": "energy",
+  "csv_path": "data/energy_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": ["E-"],
+  "min_recall": 0.8,
+  "min_linkage_rate": 0.0,
+  "expect_unknown_cause": true,
+  "injection_input": false,
+  "category": "blurry_image"
+}

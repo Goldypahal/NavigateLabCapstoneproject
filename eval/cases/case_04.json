@@ -1,0 +1,13 @@
+{
+  "id": "CASE-04",
+  "description": "Conflicting evidence scenario: the CSV anomaly occurs on Line 2, but the accompanying voice note explicitly states 'Line 3 running hot'. The pipeline should detect the anomaly, attempt linkage, and report the conflict rather than silently accepting the wrong reference. Linkage rate is intentionally low due to the mismatch.",
+  "track": "energy",
+  "csv_path": "data/energy_readings.csv",
+  "evidence_files": [],
+  "expected_anomaly_ids": ["E-"],
+  "min_recall": 0.8,
+  "min_linkage_rate": 0.3,
+  "expect_unknown_cause": false,
+  "injection_input": false,
+  "category": "conflicting"
+}
