@@ -15,7 +15,7 @@ from typing import Optional
 
 import pandas as pd
 
-from calc.energy import compute_baseline, assign_shift
+from calc.energy import compute_baseline, assign_shift, get_shift_assignment
 from calc.cost import estimate_energy_cost, estimate_water_cost
 from config import settings
 
@@ -42,17 +42,34 @@ def verify_energy_fix(
 ) -> VerificationResult:
     """
     Compare post-fix energy vs. baseline for the same shift.
-    baseline_df: historical readings used to compute baseline
-    postfix_df:  new readings after the fix (at least 3 days)
+    Both baseline and post-fix are aggregated to shift totals for fair comparison.
     """
     baseline_weeks = baseline_weeks or settings.BASELINE_WEEKS
 
-    # Aggregate to shift totals
-    for df in (baseline_df, postfix_df):
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df["shift"] = df["timestamp"].dt.hour.apply(assign_shift)
+    baseline_df = baseline_df.copy()
+    postfix_df = postfix_df.copy()
 
-    postfix_shift = postfix_df[postfix_df["shift"] == shift]
+    # Aggregate baseline to shift totals
+    b_info = [get_shift_assignment(pd.Timestamp(t)) for t in baseline_df["timestamp"]]
+    baseline_df["shift_date"] = [s[0] for s in b_info]
+    baseline_df["shift"] = [s[1] for s in b_info]
+    baseline_df["weekday"] = [s[2] for s in b_info]
+    b_agg = baseline_df.groupby(["shift_date", "shift", "weekday"])["kwh"].sum().reset_index()
+    b_agg["timestamp"] = pd.to_datetime(b_agg["shift_date"])
+
+    # Aggregate postfix to shift totals
+    p_info = [get_shift_assignment(pd.Timestamp(t)) for t in postfix_df["timestamp"]]
+    postfix_df["shift_date"] = [s[0] for s in p_info]
+    postfix_df["shift"] = [s[1] for s in p_info]
+    postfix_df["weekday"] = [s[2] for s in p_info]
+    p_agg = postfix_df.groupby(["shift_date", "shift", "weekday"])["kwh"].sum().reset_index()
+    p_agg["timestamp"] = pd.to_datetime(p_agg["shift_date"])
+
+    shift_norm = shift.strip().lower()
+    if shift_norm == "morning":
+        shift_norm = "day"
+
+    postfix_shift = p_agg[p_agg["shift"] == shift_norm]
     if postfix_shift.empty:
         return VerificationResult(
             action_id=action_id,
@@ -66,16 +83,10 @@ def verify_energy_fix(
             note=f"No post-fix readings found for shift '{shift}'.",
         )
 
-    # Baseline mean for this shift
-    baseline_df["shift"] = baseline_df["timestamp"].dt.hour.apply(assign_shift)
-    baseline_df["weekday"] = baseline_df["timestamp"].dt.weekday
-    postfix_df["weekday"] = postfix_df["timestamp"].dt.weekday
-
-    # Use the last timestamp in postfix as the reference point
     ref_ts = pd.Timestamp(postfix_df["timestamp"].max())
-    mean_kwh, _, _ = compute_baseline(baseline_df, ref_ts, shift, baseline_weeks)
+    mean_kwh, _, _ = compute_baseline(b_agg, ref_ts, shift_norm, baseline_weeks)
 
-    postfix_avg = float(postfix_shift["kwh"].sum() / max(1, len(postfix_shift["timestamp"].dt.date.unique())))
+    postfix_avg = float(postfix_shift["kwh"].mean())
     value_saved = round(mean_kwh - postfix_avg, 3)
     pct_change = round((postfix_avg - mean_kwh) / mean_kwh * 100, 2) if mean_kwh > 0 else 0.0
     cost_est = estimate_energy_cost(max(value_saved, 0))
@@ -91,7 +102,7 @@ def verify_energy_fix(
         value_saved=max(value_saved, 0.0),
         cost_saved=cost_est.total_cost if value_saved > 0 else 0.0,
         verdict=verdict,
-        note=f"Compared {len(postfix_shift)} post-fix readings vs {baseline_weeks}-week baseline.",
+        note=f"Compared {len(postfix_shift)} post-fix {shift} shifts vs {baseline_weeks}-week baseline.",
     )
 
 

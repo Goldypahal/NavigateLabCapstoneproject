@@ -28,6 +28,28 @@ SHIFT_MAP = {
 }
 
 
+def get_shift_assignment(ts: pd.Timestamp) -> tuple[datetime.date, str, int]:
+    """
+    Assign shift name and the date/weekday the shift belongs to.
+    Night shift runs 22:00 to 06:00 next day; hours 00:00–05:59 belong to
+    the previous calendar day's night shift.
+    """
+    hour = ts.hour
+    if 6 <= hour < 14:
+        shift = "day"
+        shift_date = ts.date()
+    elif 14 <= hour < 22:
+        shift = "evening"
+        shift_date = ts.date()
+    elif hour >= 22:
+        shift = "night"
+        shift_date = ts.date()
+    else:  # hour < 6
+        shift = "night"
+        shift_date = (ts - pd.Timedelta(days=1)).date()
+    return shift_date, shift, shift_date.weekday()
+
+
 def assign_shift(hour: int) -> str:
     """Return shift name for a given hour (0-23)."""
     if 6 <= hour < 14:
@@ -107,14 +129,15 @@ def run_energy_analysis(
     threshold_pct: float = None,
     sigma: float = None,
     baseline_weeks: int = None,
+    historical_df: Optional[pd.DataFrame] = None,
 ) -> EnergyAnalysisResult:
     """
     Main entry point for energy analysis.
 
     Expects df with columns: timestamp (datetime), kwh (float).
-    Adds shift and weekday columns in-place.
-    Flags anomalies where:
-      deviation > threshold_pct  AND/OR  deviation > sigma * std
+    Uses industrial shift accounting: night shift across midnight (22:00-06:00)
+    is aggregated into a single continuous shift belonging to shift_date.
+    Flags anomalies where deviation_pct >= threshold_pct.
     """
     threshold_pct = threshold_pct or settings.ANOMALY_THRESHOLD_PCT
     sigma = sigma or settings.ANOMALY_SIGMA
@@ -128,20 +151,45 @@ def run_energy_analysis(
 
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["shift"] = df["timestamp"].dt.hour.apply(assign_shift)
-    df["weekday"] = df["timestamp"].dt.weekday
+    
+    # Proper industrial shift accounting (22:00 to 06:00 continuous night shift)
+    shift_info = [get_shift_assignment(pd.Timestamp(t)) for t in df["timestamp"]]
+    df["shift_date"] = [s[0] for s in shift_info]
+    df["shift"] = [s[1] for s in shift_info]
+    df["weekday"] = [s[2] for s in shift_info]
 
-    # Aggregate to shift-level totals (sum kWh per shift per day)
-    df["shift_date"] = df["timestamp"].dt.date
+    # Aggregate to shift-level totals (sum kWh per shift per shift_date)
     shift_agg = (
         df.groupby(["shift_date", "shift", "weekday"])["kwh"]
         .sum()
         .reset_index()
     )
-    shift_agg["timestamp"] = pd.to_datetime(shift_agg["shift_date"])
 
-    # Baseline lookups must compare shift totals to historical shift totals
-    df_for_baseline = shift_agg
+    def _assign_rep_ts(row):
+        d = row["shift_date"]
+        s = row["shift"]
+        if s == "day":
+            return pd.Timestamp.combine(d, datetime.time(10, 0))   # Peak ToD
+        elif s == "evening":
+            return pd.Timestamp.combine(d, datetime.time(18, 0))   # Peak ToD
+        else:
+            return pd.Timestamp.combine(d, datetime.time(23, 0))   # Off-peak ToD
+
+    shift_agg["timestamp"] = shift_agg.apply(_assign_rep_ts, axis=1)
+
+    # Combine with prior historical telemetry if provided (supports new 1-week uploads)
+    if historical_df is not None and not historical_df.empty:
+        hdf = historical_df.copy()
+        hdf["timestamp"] = pd.to_datetime(hdf["timestamp"])
+        h_info = [get_shift_assignment(pd.Timestamp(t)) for t in hdf["timestamp"]]
+        hdf["shift_date"] = [h[0] for h in h_info]
+        hdf["shift"] = [h[1] for h in h_info]
+        hdf["weekday"] = [h[2] for h in h_info]
+        h_agg = hdf.groupby(["shift_date", "shift", "weekday"])["kwh"].sum().reset_index()
+        h_agg["timestamp"] = h_agg.apply(_assign_rep_ts, axis=1)
+        df_for_baseline = pd.concat([h_agg, shift_agg]).drop_duplicates(subset=["shift_date", "shift"]).sort_values("timestamp")
+    else:
+        df_for_baseline = shift_agg
 
     for _, row in shift_agg.iterrows():
         ts = pd.Timestamp(row["timestamp"])
@@ -160,14 +208,12 @@ def run_energy_analysis(
         excess_kwh = actual_kwh - mean_kwh
         sigma_dev = (actual_kwh - mean_kwh) / std_kwh if std_kwh > 0 else 0.0
 
-        # Flag if above threshold% OR above sigma·std
-        is_flagged = (
-            deviation_pct > threshold_pct
-            or (std_kwh > 0 and sigma_dev > sigma)
-        )
+        # Enforce threshold hurdle: only genuine percentage spikes trigger anomalies
+        is_flagged = deviation_pct >= threshold_pct
 
+        uid_tag = upload_id[:8] if upload_id else "UPL"
         anomaly_id = (
-            f"E-{ts.strftime('%Y-%m-%d')}-{shift.upper()}"
+            f"E-{uid_tag}-{row['shift_date'].strftime('%Y-%m-%d')}-{shift.upper()}"
         )
 
         anomaly = EnergyAnomaly(
