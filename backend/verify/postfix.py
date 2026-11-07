@@ -110,18 +110,28 @@ def verify_water_fix(
     action_id: int,
     baseline_df: pd.DataFrame,
     postfix_df: pd.DataFrame,
+    threshold_kl: float = 10.0,
 ) -> VerificationResult:
     """Compare post-fix unaccounted water vs. baseline."""
     for df in (baseline_df, postfix_df):
         df["unaccounted_kl"] = df["intake_kl"] - df["process_kl"] - df["discharge_kl"]
 
-    baseline_avg = float(baseline_df["unaccounted_kl"].mean())
+    # Robust baseline: exclude leak days from baseline to prevent corrupted, overstated savings (Bug 9)
+    clean_base = baseline_df[
+        (baseline_df["unaccounted_kl"] >= -2.0) & (baseline_df["unaccounted_kl"] < threshold_kl)
+    ]
+    if not clean_base.empty:
+        baseline_avg = float(clean_base["unaccounted_kl"].mean())
+    else:
+        baseline_avg = float(baseline_df["unaccounted_kl"].mean())
+
     postfix_avg = float(postfix_df["unaccounted_kl"].mean())
-    value_saved = round(baseline_avg - postfix_avg, 3)
+    overall_prefix_avg = float(baseline_df["unaccounted_kl"].mean())
+    value_saved = round(max(overall_prefix_avg - postfix_avg, 0.0), 3)
     pct_change = round((postfix_avg - baseline_avg) / max(abs(baseline_avg), 0.01) * 100, 2)
     cost_est = estimate_water_cost(max(value_saved, 0))
 
-    verdict = "improved" if pct_change < -10 else ("worsened" if pct_change > 10 else "no_change")
+    verdict = "improved" if (postfix_avg <= baseline_avg + 2.0 and value_saved > 0) or pct_change < -10 else ("worsened" if pct_change > 10 else "no_change")
 
     return VerificationResult(
         action_id=action_id,

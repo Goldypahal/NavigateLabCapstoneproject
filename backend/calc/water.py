@@ -66,12 +66,13 @@ def run_water_analysis(
     upload_id: str,
     threshold_kl: float = None,
     baseline_weeks: int = None,
+    historical_df: Optional[pd.DataFrame] = None,
 ) -> WaterAnalysisResult:
     """
     Main entry point for water balance analysis.
 
     Expects df with columns: date (or timestamp), intake_kl, process_kl, discharge_kl.
-    Returns flagged anomalies where unaccounted > threshold_kl/day.
+    Flags anomalies where unaccounted water exceeds baseline by threshold_kl/day.
     """
     threshold_kl = threshold_kl or settings.WATER_UNACCOUNTED_THRESHOLD_KL
     baseline_weeks = baseline_weeks or settings.BASELINE_WEEKS
@@ -99,23 +100,40 @@ def run_water_analysis(
     # Compute unaccounted for every row
     df["unaccounted_kl"] = df.apply(compute_water_balance, axis=1)
 
-    # Baseline unaccounted: rolling mean of previous baseline_weeks worth of days
-    # (excluding current row)
-    baseline_days = baseline_weeks * 7
-    df["baseline_unaccounted"] = (
-        df["unaccounted_kl"]
-        .shift(1)
-        .rolling(window=baseline_days, min_periods=3)
-        .mean()
-    )
+    # Integrate cross-upload historical readings if provided (Bug 3)
+    if historical_df is not None and not historical_df.empty:
+        hdf = historical_df.copy()
+        if "date" in hdf.columns:
+            hdf["date"] = pd.to_datetime(hdf["date"]).dt.date
+        elif "timestamp" in hdf.columns:
+            hdf["date"] = pd.to_datetime(hdf["timestamp"]).dt.date
+        hdf["unaccounted_kl"] = hdf.apply(compute_water_balance, axis=1)
+        df_for_baseline = pd.concat([hdf, df]).drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+    else:
+        df_for_baseline = df
 
-    # Group consecutive days above threshold into single anomaly events
-    df["is_above"] = df["unaccounted_kl"] > threshold_kl
+    # Robust baseline: estimate normal unaccounted loss from clean/non-outlier days (Bug 4)
+    clean_history = df_for_baseline[
+        (df_for_baseline["unaccounted_kl"] >= -2.0) & 
+        (df_for_baseline["unaccounted_kl"] < 10.0)
+    ]
+    if not clean_history.empty:
+        normal_baseline = float(clean_history["unaccounted_kl"].median())
+    else:
+        normal_baseline = 4.0
+
+    df["baseline_unaccounted"] = normal_baseline
+    df["excess_kl"] = df["unaccounted_kl"] - df["baseline_unaccounted"]
+
+    # Flag days where excess unaccounted water exceeds threshold
+    df["is_above"] = df["excess_kl"] >= threshold_kl
     df["is_conflict"] = df["unaccounted_kl"] < -2.0  # more out than in
 
-    # Identify runs of flagged days
+    # Group consecutive days above threshold into single anomaly events
     df["group"] = (df["is_above"] != df["is_above"].shift()).cumsum()
     flagged_groups = df[df["is_above"]].groupby("group")
+
+    uid_tag = upload_id[:8] if upload_id else "UPL"
 
     for _, grp in flagged_groups:
         days = len(grp)
@@ -124,11 +142,12 @@ def run_water_analysis(
         avg_process = float(grp["process_kl"].mean())
         avg_discharge = float(grp["discharge_kl"].mean())
         avg_unaccounted = float(grp["unaccounted_kl"].mean())
-        baseline_val = float(grp["baseline_unaccounted"].mean()) if grp["baseline_unaccounted"].notna().any() else 0.0
+        baseline_val = float(grp["baseline_unaccounted"].mean())
         excess_kl = avg_unaccounted - max(baseline_val, 0.0)
         total_loss = round(excess_kl * days, 3)
 
-        anomaly_id = f"W-{first_date.strftime('%Y-%m-%d')}-D{days}"
+        # Upload-scoped anomaly ID to prevent UNIQUE constraint collisions (Bug 2)
+        anomaly_id = f"W-{uid_tag}-{first_date.strftime('%Y-%m-%d')}-D{days}"
 
         anomaly = WaterAnomaly(
             anomaly_id=anomaly_id,
@@ -147,7 +166,7 @@ def run_water_analysis(
     # Also flag metering conflicts
     conflict_rows = df[df["is_conflict"]]
     for _, row in conflict_rows.iterrows():
-        anomaly_id = f"W-CONFLICT-{row['date'].strftime('%Y-%m-%d')}"
+        anomaly_id = f"W-{uid_tag}-CONFLICT-{row['date'].strftime('%Y-%m-%d')}"
         anomaly = WaterAnomaly(
             anomaly_id=anomaly_id,
             date=row["date"],

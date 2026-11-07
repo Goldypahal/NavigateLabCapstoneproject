@@ -145,3 +145,4 @@ def test_verify_water_fix_worsened():
     assert result.pct_change > 10.0
     assert result.value_saved == 0.0
     assert result.cost_saved == 0.0
+
