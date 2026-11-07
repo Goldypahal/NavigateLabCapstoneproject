@@ -81,8 +81,7 @@ function StatusBadge({ msg, type }) {
 
 export default function UploadPage({ uploadId, setUploadId, track, setTrack }) {
   const navigate = useNavigate()
-  const [csvFile, setCsvFile] = useState(null)
-  const [csvStatus, setCsvStatus] = useState(null)
+  const [csvStatuses, setCsvStatuses] = useState([])
   const [evidenceStatuses, setEvidenceStatuses] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentUploadId, setCurrentUploadId] = useState(uploadId)
@@ -92,22 +91,26 @@ export default function UploadPage({ uploadId, setUploadId, track, setTrack }) {
   const [evShift, setEvShift] = useState('night')
   const [evEquipment, setEvEquipment] = useState('')
 
-  async function handleCSV(file, trackOverride) {
-    const targetTrack = trackOverride || (track === 'both' ? 'energy' : track)
-    setCsvFile(file)
+  async function handleCSV(file, targetTrack) {
     setLoading(true)
     try {
-      const res = await uploadCSV(file, targetTrack)
+      // Pass currentUploadId so subsequent CSVs share the same upload session (Bug 5)
+      const res = await uploadCSV(file, targetTrack, currentUploadId)
       if (res.errors.length) {
-        setCsvStatus({ msg: res.errors.join('; '), type: 'error' })
+        setCsvStatuses(prev => [...prev, { msg: `[${targetTrack.toUpperCase()}] ${res.errors.join('; ')}`, type: 'error' }])
       } else {
         const uid = res.upload_id
-        setCurrentUploadId(uid)
-        setUploadId(uid)
-        setCsvStatus({ msg: `✓ [${targetTrack.toUpperCase()}] ${res.rows_accepted} rows accepted. Upload ID: ${uid}`, type: 'success' })
+        if (!currentUploadId) {
+          setCurrentUploadId(uid)
+          setUploadId(uid)
+        }
+        setCsvStatuses(prev => [...prev, {
+          msg: `✓ [${targetTrack.toUpperCase()}] ${res.rows_accepted} rows accepted (${file.name}). Session: ${uid}`,
+          type: 'success'
+        }])
       }
     } catch (e) {
-      setCsvStatus({ msg: `Upload failed: ${e.message}`, type: 'error' })
+      setCsvStatuses(prev => [...prev, { msg: `[${targetTrack.toUpperCase()}] Upload failed: ${e.message}`, type: 'error' }])
     }
     setLoading(false)
   }
@@ -154,21 +157,54 @@ export default function UploadPage({ uploadId, setUploadId, track, setTrack }) {
       </div>
 
       {/* CSV Upload */}
-      <div className="card">
-        <h2 className="font-semibold text-gray-800 mb-3">2. Meter Readings CSV</h2>
+      <div className="card space-y-4">
+        <h2 className="font-semibold text-gray-800">2. Meter Readings CSV</h2>
         {loading && (
-          <div className="flex items-center gap-2 text-sm text-blue-600 mb-3">
-            <Loader2 className="w-4 h-4 animate-spin" /> Validating CSV…
+          <div className="flex items-center gap-2 text-sm text-blue-600 mb-2">
+            <Loader2 className="w-4 h-4 animate-spin" /> Validating & processing CSV…
           </div>
         )}
-        <FileDropZone
-          label="Drop CSV file here or click to browse"
-          accept=".csv,text/csv"
-          icon={FileText}
-          onFile={handleCSV}
-          hint="Max 50 MB · energy_readings.csv or water_readings.csv"
-        />
-        {csvStatus && <StatusBadge msg={csvStatus.msg} type={csvStatus.type} />}
+
+        {track === 'both' ? (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-xs font-medium text-blue-700 mb-1 flex items-center gap-1">
+                <Zap className="w-3.5 h-3.5" /> Energy Meter CSV (15-min kWh)
+              </p>
+              <FileDropZone
+                label="Drop Energy CSV"
+                accept=".csv,text/csv"
+                icon={FileText}
+                onFile={f => handleCSV(f, 'energy')}
+                hint="energy_readings.csv"
+              />
+            </div>
+            <div>
+              <p className="text-xs font-medium text-cyan-700 mb-1 flex items-center gap-1">
+                <Droplets className="w-3.5 h-3.5" /> Water Meter CSV (Daily Balance)
+              </p>
+              <FileDropZone
+                label="Drop Water CSV"
+                accept=".csv,text/csv"
+                icon={FileText}
+                onFile={f => handleCSV(f, 'water')}
+                hint="water_readings.csv"
+              />
+            </div>
+          </div>
+        ) : (
+          <FileDropZone
+            label={`Drop ${track === 'energy' ? 'Energy' : 'Water'} CSV file here or click to browse`}
+            accept=".csv,text/csv"
+            icon={FileText}
+            onFile={f => handleCSV(f, track)}
+            hint={track === 'energy' ? '15-min kWh readings (energy_readings.csv)' : 'Daily water balance readings (water_readings.csv)'}
+          />
+        )}
+
+        {csvStatuses.map((st, i) => (
+          <StatusBadge key={i} msg={st.msg} type={st.type} />
+        ))}
       </div>
 
       {/* Evidence Upload */}

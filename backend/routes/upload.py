@@ -71,6 +71,7 @@ def _next_source_id(db: Session, evidence_type: str) -> str:
 async def upload_csv(
     file: UploadFile = File(...),
     track: str = Form(...),     # 'energy' or 'water'
+    upload_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     """Upload and validate a meter readings CSV."""
@@ -97,7 +98,7 @@ async def upload_csv(
             message="CSV rejected due to validation errors.",
         )
 
-    upload_id = _make_upload_id()
+    upload_id = upload_id or _make_upload_id()
 
     # Persist readings to DB
     df = result.df

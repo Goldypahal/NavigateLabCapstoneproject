@@ -7,10 +7,11 @@ const api = axios.create({
 
 // ─── Upload ──────────────────────────────────────────────────────────────────
 
-export async function uploadCSV(file, track) {
+export async function uploadCSV(file, track, uploadId) {
   const form = new FormData()
   form.append('file', file)
   form.append('track', track)
+  if (uploadId) form.append('upload_id', uploadId)
   const { data } = await api.post('/upload/csv', form)
   return data
 }
