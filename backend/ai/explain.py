@@ -87,7 +87,7 @@ _INJECTION_PATTERNS = [
     r"mark\s+all\s+actions\s+approved",
     r"calculate\s+the\s+savings\s+yourself",
     r"SYSTEM\s*:",
-    r"no\s+anomalies",
+    r"(ignore\s+(all\s+)?data\s+and\s+)?(report|say|state)\s+(that\s+there\s+are\s+)?no\s+anomalies",
 ]
 
 _INJECTION_RE = re.compile(
@@ -143,57 +143,81 @@ def retrieve_relevant_evidence(
         if shift and ev_shift and ev_shift != shift:
             continue
 
-        # Equipment filter (soft — substring match)
+        # Equipment filter (soft match — ignore if either side doesn't specify equipment)
         ev_equipment = ev.get("equipment", "")
-        if equipment and ev_equipment and equipment.lower() not in ev_equipment.lower():
-            if ev_equipment.lower() not in equipment.lower():
-                pass  # if no clear match, still include (evidence might mention it)
+        if equipment and ev_equipment:
+            eq_clean = equipment.lower().replace("-", "").replace(" ", "")
+            ev_clean = ev_equipment.lower().replace("-", "").replace(" ", "")
+            if eq_clean not in ev_clean and ev_clean not in eq_clean:
+                continue
 
         relevant.append(ev)
 
     return relevant
 
 
-# ─── Validation ──────────────────────────────────────────────────────────────
+# ─── Validation & Sanitisation ──────────────────────────────────────────────
 
-def _validate_llm_output(
+NUMBER_REGEX = re.compile(
+    r"(₹\s*\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\s*(?:%|₹|kwh|kw|kl|litre|liter|rupees?|inr)(?!\w))",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_and_validate_llm_output(
     explain: ExplainJSON,
     evidence_store: list[dict],
     source_id_to_text: dict[str, str],
-) -> tuple[bool, list[str]]:
+) -> tuple[ExplainJSON, bool, list[str]]:
     """
-    Validate that:
-    1. Every source_id in evidence citations exists in the evidence store.
-    2. Every quote is a verbatim substring of that source's text.
-    3. No numbers appear in the output (kWh, kL, %, ₹, digits followed by units).
+    1. Detect and strip numeric quantities from LLM text (Hard Rule 1).
+    2. Validate that every source_id exists in the evidence store.
+    3. Validate that every quote is a verbatim substring of that source text.
+    4. Downgrade cause_status ONLY if evidence citations are invalid.
     """
     errors = []
     valid_ids = set(source_id_to_text.keys())
 
-    # Check for numbers in AI output (AI must not compute numbers)
-    number_pattern = re.compile(
-        r"\b\d+(\.\d+)?\s*(kWh|kW|kL|litre|liter|%|₹|rupee|INR|kwh)\b",
-        re.IGNORECASE,
-    )
-    full_text = explain.likely_cause + explain.uncertainty_note
-    if number_pattern.search(full_text):
-        errors.append("LLM output contains numeric quantities — stripped.")
+    # Check and actively strip numbers from AI text (rule: AI does no math)
+    num_matches = NUMBER_REGEX.findall(explain.likely_cause + " " + explain.uncertainty_note)
+    cleaned_cause = NUMBER_REGEX.sub("[NUMBER_REMOVED_BY_CODE]", explain.likely_cause)
+    cleaned_note = NUMBER_REGEX.sub("[NUMBER_REMOVED_BY_CODE]", explain.uncertainty_note)
+    if num_matches:
+        errors.append(f"AI generated {len(num_matches)} numeric quantities — stripped by code.")
 
+    # Validate citations
+    citations_valid = True
+    valid_citations = []
     for citation in explain.evidence:
         if citation.source_id not in valid_ids:
-            errors.append(
-                f"Citation source_id '{citation.source_id}' not found in evidence store."
-            )
+            errors.append(f"Citation source_id '{citation.source_id}' not found in evidence store.")
+            citations_valid = False
             continue
 
         source_text = source_id_to_text[citation.source_id]
-        # Case-insensitive substring check
         if citation.quote and citation.quote.lower() not in source_text.lower():
-            errors.append(
-                f"Quote from '{citation.source_id}' is not a verbatim substring of source text."
-            )
+            errors.append(f"Quote from '{citation.source_id}' is not a verbatim substring of source text.")
+            citations_valid = False
+            continue
 
-    return len(errors) == 0, errors
+        valid_citations.append(citation)
+
+    # Determine cause status based strictly on evidence validity
+    new_cause_status = explain.cause_status
+    if not citations_valid or len(valid_citations) < len(explain.evidence):
+        if not valid_citations:
+            new_cause_status = "unknown"
+        else:
+            new_cause_status = "partially_supported"
+
+    cleaned_explain = explain.model_copy(update={
+        "likely_cause": cleaned_cause,
+        "uncertainty_note": cleaned_note,
+        "evidence": valid_citations,
+        "cause_status": new_cause_status,
+    })
+
+    return cleaned_explain, citations_valid, errors
 
 
 # ─── Main explain pipeline ────────────────────────────────────────────────────
@@ -298,29 +322,16 @@ def explain_anomaly_with_evidence(
                 raw_json=llm_result.content,
             )
 
-    # Step 6: Validate citations
-    is_valid, citation_errors = _validate_llm_output(
+    # Step 6: Sanitize numbers and validate citations
+    explain_obj, citations_valid, validation_errors = _sanitize_and_validate_llm_output(
         explain_obj, relevant_evidence, source_id_to_text
     )
-    validation_errors.extend(citation_errors)
-
-    # Remove invalid citations and downgrade cause_status
-    if not is_valid:
-        valid_citations = [
-            c for c in explain_obj.evidence
-            if c.source_id in source_id_to_text
-            and c.quote.lower() in source_id_to_text[c.source_id].lower()
-        ]
-        explain_obj = explain_obj.model_copy(update={
-            "evidence": valid_citations,
-            "cause_status": "unknown" if not valid_citations else "partially_supported",
-        })
 
     return ExplainResult(
         anomaly_id=anomaly_id,
         model_used=llm_result.model,
         explain_json=explain_obj,
-        is_valid=is_valid,
+        is_valid=citations_valid,
         validation_errors=validation_errors,
         input_tokens=llm_result.input_tokens,
         output_tokens=llm_result.output_tokens,
