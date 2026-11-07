@@ -4,7 +4,10 @@
   "track": "energy",
   "csv_path": "data/energy_readings.csv",
   "evidence_files": [],
-  "expected_anomaly_ids": ["2026-10-13-NIGHT", "2026-10-25-DAY"],
+  "expected_anomaly_ids": [
+    "2026-10-13-NIGHT",
+    "2026-10-25-DAY"
+  ],
   "min_recall": 0.8,
   "min_linkage_rate": 0.0,
   "expect_unknown_cause": true,

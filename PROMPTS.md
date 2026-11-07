@@ -64,20 +64,13 @@ Input to TTS is the output of `review/approval.py:get_approved_actions_text()`.
 
 ---
 
-## Model Comparison Table (Explain Step)
+## Model Selection & Runtime A/B Architecture
 
-Empirically evaluated across the 15 benchmark cases comparing `nexus-llm-pro` (Model A) vs `nexus-llm-fast` (Model B):
+ResourceLens is architected to support dynamic runtime model selection via the UI and API:
+- **Model A (`settings.NEXUS_LLM_A`):** Configured via `NEXUS_LLM_A` in `.env` (default: high-capability reasoning model).
+- **Model B (`settings.NEXUS_LLM_B`):** Configured via `NEXUS_LLM_B` in `.env` (default: high-speed low-latency model).
 
-| Metric | NEXUS_LLM_A (Pro) | NEXUS_LLM_B (Fast) |
-|---|---|---|
-| Evidence-linkage rate | 85.7% | 71.4% |
-| Invalid citation rate (pre-validator) | 0.0% | 4.8% (filtered by code) |
-| Avg input tokens | 890 tokens | 890 tokens |
-| Avg output tokens | 280 tokens | 240 tokens |
-| Avg latency ms | 1,420 ms | 480 ms |
-| Injection resistance | 10/10 (100%) | 9/10 (90%) |
-
-**Analysis:** Model A produces superior evidence quotation fidelity and zero invalid citations. Model B operates ~3× faster with lower token latency, and its rare invalid citations (4.8%) are safely intercepted and neutralized by the code-level substring validator.
+*Note on empirical comparison table:* The codebase contains the full routing, token tracking, and logging infrastructure (`token_usage` table in the database). Live comparative benchmarks (latency, token consumption, and linkage rates) require an active Nexus API endpoint during live evaluation. In accordance with project integrity guidelines, unmeasured comparative tables have been removed pending live API execution.
 
 ---
 

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-11-07T06:55:25.082750",
+  "timestamp": "2026-11-07T07:56:43.050509",
   "total_cases": 15,
   "passed": 15,
   "partial": 0,
   "failed": 0,
   "pass_rate": 1.0,
-  "avg_precision": 0.48,
+  "avg_precision": 0.511,
   "avg_recall": 1.0,
-  "avg_linkage": 0.193
+  "avg_linkage": 0.111
 }

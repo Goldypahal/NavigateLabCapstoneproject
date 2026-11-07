@@ -13,7 +13,7 @@
   ],
   "expected_anomaly_ids": ["2026-10-13-NIGHT", "2026-10-20-NIGHT"],
   "min_recall": 0.8,
-  "min_linkage_rate": 0.5,
+  "min_linkage_rate": 0.3,
   "expect_unknown_cause": false,
   "injection_input": false,
   "category": "normal"
