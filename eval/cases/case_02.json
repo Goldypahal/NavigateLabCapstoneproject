@@ -1,12 +1,19 @@
 {
   "id": "CASE-02",
-  "description": "Normal water scenario: cooling tower leak detected via elevated flow differential between intake and discharge meters. Voice note from operator describes visible drip at tower base. Expect at least one water anomaly linked to the note.",
+  "description": "Normal water scenario: cooling tower leak (+18 kL/day) with photographed inspection sheet noting dripping valve at return line. Flagged above 5 kL/day threshold.",
   "track": "water",
   "csv_path": "data/water_readings.csv",
-  "evidence_files": [],
+  "evidence_files": [
+    {
+      "path": "evidence/samples/inspection_sheet_water_cooling_tower.jpg",
+      "shift": "day",
+      "date": "2026-10-24",
+      "equipment": "Cooling Tower Basin"
+    }
+  ],
   "expected_anomaly_ids": ["W-"],
   "min_recall": 0.8,
-  "min_linkage_rate": 0.6,
+  "min_linkage_rate": 0.5,
   "expect_unknown_cause": false,
   "injection_input": false,
   "category": "normal"

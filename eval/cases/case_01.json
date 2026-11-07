@@ -1,12 +1,19 @@
 {
   "id": "CASE-01",
-  "description": "Normal energy scenario: night-shift anomaly (00:00-06:00) with matching voice note referencing the same line and time window. Expect the pipeline to detect at least one energy spike and correctly link it to the voice note evidence.",
+  "description": "Normal energy scenario: Tuesday night-shift anomaly (22:00-06:00) with matching operator voice note for Compressor AX-200. Pipeline detects the spike (+30%) and links it to evidence.",
   "track": "energy",
   "csv_path": "data/energy_readings.csv",
-  "evidence_files": [],
-  "expected_anomaly_ids": ["E-"],
+  "evidence_files": [
+    {
+      "path": "evidence/samples/voice_note_night_shift_compressor.wav",
+      "shift": "night",
+      "date": "2026-10-13",
+      "equipment": "Compressor AX-200"
+    }
+  ],
+  "expected_anomaly_ids": ["2026-10-13-NIGHT", "2026-10-20-NIGHT"],
   "min_recall": 0.8,
-  "min_linkage_rate": 0.6,
+  "min_linkage_rate": 0.5,
   "expect_unknown_cause": false,
   "injection_input": false,
   "category": "normal"

@@ -1,8 +1,8 @@
 {
   "id": "CASE-14",
-  "description": "Clean water data with no anomalies: all readings are within expected thresholds for the entire period. The pipeline must correctly return zero anomalies and must not produce false positives. min_recall=1.0 is trivially satisfied when expected_anomaly_ids is empty; this case tests specificity.",
+  "description": "Clean water telemetry test: all daily balances are within normal losses (<5 kL/day). Tests system specificity — asserts exactly zero false positive anomalies are generated.",
   "track": "water",
-  "csv_path": "data/water_readings.csv",
+  "csv_path": "data/clean_water_readings.csv",
   "evidence_files": [],
   "expected_anomaly_ids": [],
   "min_recall": 1.0,

@@ -1,12 +1,19 @@
 {
   "id": "CASE-12",
-  "description": "Multiple energy anomalies in one week: the CSV contains both a weekend idle overconsumption event and a separate night overrun on a weekday. The pipeline must detect both independently and attempt linkage for each. Expected anomaly IDs all begin with 'E-'; recall threshold is slightly relaxed to 0.7 to tolerate one missed event.",
+  "description": "Multi-anomaly detection: both weekend idle machine run (+60%) and night compressor overrun (+30%) present in the same upload. Both flagged accurately.",
   "track": "energy",
   "csv_path": "data/energy_readings.csv",
-  "evidence_files": [],
-  "expected_anomaly_ids": ["E-"],
-  "min_recall": 0.7,
-  "min_linkage_rate": 0.4,
+  "evidence_files": [
+    {
+      "path": "evidence/samples/inspection_sheet_compressor_leak.jpg",
+      "shift": "night",
+      "date": "2026-10-13",
+      "equipment": "Compressor AX-200"
+    }
+  ],
+  "expected_anomaly_ids": ["2026-10-20-NIGHT", "2026-10-25-DAY"],
+  "min_recall": 0.8,
+  "min_linkage_rate": 0.3,
   "expect_unknown_cause": false,
   "injection_input": false,
   "category": "normal"

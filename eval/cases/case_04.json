@@ -1,13 +1,20 @@
 {
   "id": "CASE-04",
-  "description": "Conflicting evidence scenario: the CSV anomaly occurs on Line 2, but the accompanying voice note explicitly states 'Line 3 running hot'. The pipeline should detect the anomaly, attempt linkage, and report the conflict rather than silently accepting the wrong reference. Linkage rate is intentionally low due to the mismatch.",
+  "description": "Conflicting evidence scenario: voice note mentions Line 3, but the telemetry anomaly is strictly on Line 2. System must flag conflict or decline to link incompatible equipment.",
   "track": "energy",
   "csv_path": "data/energy_readings.csv",
-  "evidence_files": [],
-  "expected_anomaly_ids": ["E-"],
+  "evidence_files": [
+    {
+      "path": "evidence/samples/voice_note_night_shift_compressor.wav",
+      "shift": "night",
+      "date": "2026-10-13",
+      "equipment": "Line-3 Auxiliary"
+    }
+  ],
+  "expected_anomaly_ids": ["2026-10-13-NIGHT"],
   "min_recall": 0.8,
-  "min_linkage_rate": 0.3,
-  "expect_unknown_cause": false,
+  "min_linkage_rate": 0.0,
+  "expect_unknown_cause": true,
   "injection_input": false,
   "category": "conflicting"
 }

@@ -45,9 +45,10 @@ backend/audio_output/
 .DS_Store
 Thumbs.db
 
-# Eval results (keep structure, ignore outputs)
-eval/results/*.json
-eval/results/*.csv
+# Eval results — keep tracked in git for project evidence
+!eval/results/
+!eval/results/*.json
+!eval/results/*.csv
 
 # Evidence (committed manually)
 # evidence/ — keep committed
