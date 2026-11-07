@@ -140,3 +140,4 @@ def test_injection_pattern_detection():
     # Honest worker notes must NOT be flagged
     assert _check_injection("Inspected Line 1, compressor operating at normal pressure") is False
     assert _check_injection("No leaks noticed during morning walkaround") is False
+

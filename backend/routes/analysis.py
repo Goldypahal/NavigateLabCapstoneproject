@@ -60,15 +60,20 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
     if not readings:
         raise HTTPException(404, f"No readings found for upload_id={req.upload_id}")
 
-    # Clean up prior analysis results for this upload to prevent duplicates on rerun (Bug 9)
+    # Clean up prior analysis results for this upload while preserving manager decisions (Bug 7)
     existing_anomalies = db.query(Anomaly).filter(Anomaly.upload_id == req.upload_id).all()
+    preserved_action_keys = set()
     for ea in existing_anomalies:
         existing_actions = db.query(Action).filter(Action.anomaly_id == ea.anomaly_id).all()
         for act in existing_actions:
-            db.query(Approval).filter(Approval.action_id == act.id).delete()
-            db.delete(act)
+            if act.status in ("approved", "edited", "rejected"):
+                # Preserve manager-reviewed actions, their approvals, and verification records!
+                preserved_action_keys.add((act.anomaly_id, act.action_text))
+            else:
+                # Remove un-reviewed pending actions
+                db.delete(act)
+        # Remove old explanation to regenerate fresh AI explanation
         db.query(Explanation).filter(Explanation.anomaly_id == ea.anomaly_id).delete()
-        db.delete(ea)
     db.flush()
 
     evidence_rows = db.query(Evidence).filter(Evidence.upload_id == req.upload_id).all()
@@ -77,6 +82,15 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
     tracks = [req.track] if req.track != "both" else ["energy", "water"]
     total_anomalies = 0
 
+    from ai.explain import (
+        _sanitize_and_validate_llm_output,
+        ExplainJSON,
+        retrieve_relevant_evidence,
+        _check_injection,
+        _INJECTION_RE,
+    )
+    import nexus_client as nc
+
     for track in tracks:
         track_readings = [r for r in readings if r.track == track]
         if not track_readings:
@@ -84,7 +98,7 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
 
         df = _readings_to_df(track_readings, track)
 
-        # Baseline across uploads: fetch prior historical readings for baseline (Bug 6)
+        # Baseline across uploads: fetch prior historical readings for baseline (Bug 6 & Bug 3)
         hist_readings = db.query(Reading).filter(
             Reading.track == track,
             Reading.upload_id != req.upload_id
@@ -106,15 +120,17 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                 df,
                 upload_id=req.upload_id,
                 baseline_weeks=req.baseline_weeks,
+                historical_df=historical_df,
             )
             anomaly_list = analysis.anomalies
 
         if not anomaly_list:
             continue
 
-        # Prepare anomaly summaries and persist DB anomalies
+        # Prepare anomaly summaries, per-anomaly filtered evidence, and persist DB anomalies
         anom_summaries = []
         anom_meta = {}
+        anom_rel_evidence = {}
 
         for anom in anomaly_list:
             if track == "energy":
@@ -129,13 +145,13 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                 sigma_dev = anom.sigma_deviation
                 ts = anom.timestamp
                 shift = anom.shift
+                anom_date = ts.date()
+                eq = getattr(anom, "equipment", None)
             else:
-                # Water cost uses total_loss_kl across event window (Bug 5)
                 cost_est = estimate_water_cost(anom.total_loss_kl)
                 excess = anom.total_loss_kl
                 actual = anom.unaccounted_kl
                 baseline = anom.baseline_unaccounted_kl
-                # Prevent massive 60,000% on zero baseline (Bug 19)
                 if anom.baseline_unaccounted_kl > 0.5:
                     deviation_pct = round((anom.unaccounted_kl - anom.baseline_unaccounted_kl) / anom.baseline_unaccounted_kl * 100, 2)
                 else:
@@ -143,23 +159,62 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                 sigma_dev = None
                 ts = datetime.datetime.combine(anom.date, datetime.time())
                 shift = None
+                anom_date = anom.date
+                eq = None
 
-            db_anomaly = Anomaly(
-                anomaly_id=anom.anomaly_id,
-                upload_id=req.upload_id,
-                track=track,
-                timestamp=ts,
+            # Code-side evidence filtering by date, shift, and equipment (Bug 1 fix)
+            rel_ev = retrieve_relevant_evidence(
+                evidence_store,
+                anom_date,
                 shift=shift,
-                weekday=ts.weekday() if ts else None,
-                actual_value=actual,
-                baseline_value=baseline,
-                deviation_pct=deviation_pct,
-                excess_value=excess,
-                sigma_deviation=sigma_dev,
-                estimated_cost=cost_est.total_cost,
-                unaccounted_kl=anom.unaccounted_kl if track == "water" else None,
+                equipment=eq,
+                duration_days=getattr(anom, "days_above_threshold", 1),
             )
-            db.add(db_anomaly)
+
+            # Prompt injection security scanning & neutralization (Bug 1 fix)
+            safe_rel_ev = []
+            for ev in rel_ev:
+                ev_copy = dict(ev)
+                raw_text = ev_copy.get("text", "")
+                if _check_injection(raw_text):
+                    ev_copy["text"] = _INJECTION_RE.sub(
+                        "[SECURITY_QUARANTINE: Injection payload intercepted and neutralized]",
+                        raw_text,
+                    )
+                safe_rel_ev.append(ev_copy)
+
+            anom_rel_evidence[anom.anomaly_id] = safe_rel_ev
+
+            # Upsert anomaly record (Bug 2 fix: avoid UNIQUE constraint failures on re-analysis)
+            existing_anom = db.query(Anomaly).filter(Anomaly.anomaly_id == anom.anomaly_id).first()
+            if existing_anom:
+                existing_anom.timestamp = ts
+                existing_anom.shift = shift
+                existing_anom.weekday = ts.weekday() if ts else None
+                existing_anom.actual_value = actual
+                existing_anom.baseline_value = baseline
+                existing_anom.deviation_pct = deviation_pct
+                existing_anom.excess_value = excess
+                existing_anom.sigma_deviation = sigma_dev
+                existing_anom.estimated_cost = cost_est.total_cost
+                existing_anom.unaccounted_kl = anom.unaccounted_kl if track == "water" else None
+            else:
+                db_anomaly = Anomaly(
+                    anomaly_id=anom.anomaly_id,
+                    upload_id=req.upload_id,
+                    track=track,
+                    timestamp=ts,
+                    shift=shift,
+                    weekday=ts.weekday() if ts else None,
+                    actual_value=actual,
+                    baseline_value=baseline,
+                    deviation_pct=deviation_pct,
+                    excess_value=excess,
+                    sigma_deviation=sigma_dev,
+                    estimated_cost=cost_est.total_cost,
+                    unaccounted_kl=anom.unaccounted_kl if track == "water" else None,
+                )
+                db.add(db_anomaly)
             db.flush()
 
             anom_summaries.append({
@@ -168,6 +223,10 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                 "timestamp": str(ts),
                 "shift": shift,
                 "deviation_pct": deviation_pct,
+                "relevant_evidence": [
+                    {"source_id": e["source_id"], "type": e["type"], "text": e["text"]}
+                    for e in safe_rel_ev
+                ]
             })
             anom_meta[anom.anomaly_id] = {
                 "excess": excess,
@@ -176,10 +235,7 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
             }
             total_anomalies += 1
 
-        # Batched LLM Explanation: 1 call per upload to avoid timeouts and token ballooning (Bug 3)
-        from ai.explain import _sanitize_and_validate_llm_output, ExplainJSON
-        import nexus_client as nc
-
+        # Batched LLM Explanation: 1 batched call with per-anomaly isolated relevant evidence
         llm_batch_res = nc.explain_anomalies_batch(
             anomalies_summary=anom_summaries,
             evidence_snippets=evidence_store,
@@ -227,9 +283,10 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                     recommended_actions=[],
                 )
 
-            # Sanitize numbers and validate citations
+            # Sanitize numbers and validate citations strictly against THIS anomaly's relevant evidence (Bug 1 fix)
+            anom_evidence = anom_rel_evidence.get(anom.anomaly_id, [])
             cleaned_ej, is_valid, validation_errors = _sanitize_and_validate_llm_output(
-                ej, evidence_store, source_id_to_text
+                ej, anom_evidence, source_id_to_text
             )
 
             exp = Explanation(
@@ -253,6 +310,9 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
             meta = anom_meta[anom.anomaly_id]
             action_dicts = []
             for ra in cleaned_ej.recommended_actions:
+                # Skip duplicate creation if this action is already approved/edited/rejected (Bug 7 fix)
+                if (anom.anomaly_id, ra.action) in preserved_action_keys:
+                    continue
                 action_dicts.append({
                     "anomaly_id": anom.anomaly_id,
                     "action_text": ra.action,
@@ -266,11 +326,6 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
             ranked = rank_actions_by_loss(action_dicts, track)
             for ad in ranked:
                 db.add(Action(**ad))
-
-    db.commit()
-    return {"message": f"Analysis complete. {total_anomalies} anomalies found.", "upload_id": req.upload_id}
-
-            total_anomalies += 1
 
     db.commit()
     return {"message": f"Analysis complete. {total_anomalies} anomalies found.", "upload_id": req.upload_id}

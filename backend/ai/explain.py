@@ -116,14 +116,17 @@ def retrieve_relevant_evidence(
     shift: Optional[str],
     equipment: Optional[str] = None,
     window_days: int = 1,
+    duration_days: int = 1,
 ) -> list[dict]:
     """
     Code-side filtering: return only evidence items whose date is within
-    ±window_days of the anomaly date and whose shift/equipment match (if set).
+    the anomaly window (or ±window_days) and whose shift/equipment match (if set).
 
     This keeps the LLM prompt small and prevents it seeing unrelated data.
     """
     relevant = []
+    end_date = anomaly_date + datetime.timedelta(days=max(1, duration_days))
+
     for ev in evidence_store:
         ev_date_raw = ev.get("date")
         if ev_date_raw:
@@ -131,9 +134,12 @@ def retrieve_relevant_evidence(
                 ev_date = (
                     ev_date_raw
                     if isinstance(ev_date_raw, datetime.date)
-                    else datetime.date.fromisoformat(str(ev_date_raw))
+                    else datetime.date.fromisoformat(str(ev_date_raw)[:10])
                 )
-                if abs((ev_date - anomaly_date).days) > window_days:
+                # Check if evidence date falls within the anomaly duration window (+- window_days)
+                start_boundary = anomaly_date - datetime.timedelta(days=window_days)
+                end_boundary = end_date + datetime.timedelta(days=window_days)
+                if not (start_boundary <= ev_date <= end_boundary):
                     continue
             except Exception:
                 pass  # if date unparseable, include it (safe to over-include)
@@ -258,6 +264,7 @@ def explain_anomaly_with_evidence(
         anomaly_date,
         shift=anomaly.get("shift"),
         equipment=anomaly.get("equipment"),
+        duration_days=anomaly.get("days_above_threshold", 1),
     )
 
     # Step 2: Injection scan
