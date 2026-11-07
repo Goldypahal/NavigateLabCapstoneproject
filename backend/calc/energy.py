@@ -191,13 +191,26 @@ def run_energy_analysis(
     else:
         df_for_baseline = shift_agg
 
+    flagged_shifts: set[tuple[datetime.date, str]] = set()
+
     for _, row in shift_agg.iterrows():
         ts = pd.Timestamp(row["timestamp"])
         shift = row["shift"]
         actual_kwh = float(row["kwh"])
+        s_date = row["shift_date"]
+
+        # Robust baseline: exclude previously flagged anomalous shifts to prevent baseline inflation (Bug 8)
+        if flagged_shifts:
+            clean_baseline_df = df_for_baseline[
+                ~df_for_baseline.apply(
+                    lambda r: (r["shift_date"], r["shift"]) in flagged_shifts, axis=1
+                )
+            ]
+        else:
+            clean_baseline_df = df_for_baseline
 
         mean_kwh, std_kwh, n = compute_baseline(
-            df_for_baseline, ts, shift, baseline_weeks
+            clean_baseline_df, ts, shift, baseline_weeks
         )
 
         if mean_kwh <= 0 or n < 2:
@@ -210,6 +223,8 @@ def run_energy_analysis(
 
         # Enforce threshold hurdle: only genuine percentage spikes trigger anomalies
         is_flagged = deviation_pct >= threshold_pct
+        if is_flagged:
+            flagged_shifts.add((s_date, shift))
 
         uid_tag = upload_id[:8] if upload_id else "UPL"
         anomaly_id = (
