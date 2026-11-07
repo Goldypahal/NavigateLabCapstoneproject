@@ -105,7 +105,7 @@ export default function AnalysisPage({ uploadId, track }) {
       await runAnalysis({
         uploadId,
         track: track || 'energy',
-        model: model === 'b' ? undefined : undefined, // resolved server-side
+        model: model === 'b' ? 'nexus-llm-fast' : 'nexus-llm-pro',
         thresholdPct,
       })
       const data = await getAnomalies(uploadId)

@@ -82,24 +82,29 @@ function StatusBadge({ msg, type }) {
 export default function UploadPage({ uploadId, setUploadId, track, setTrack }) {
   const navigate = useNavigate()
   const [csvFile, setCsvFile] = useState(null)
-  const [evidenceFiles, setEvidenceFiles] = useState([])
   const [csvStatus, setCsvStatus] = useState(null)
   const [evidenceStatuses, setEvidenceStatuses] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentUploadId, setCurrentUploadId] = useState(uploadId)
 
-  async function handleCSV(file) {
+  // Evidence metadata fields (Bug 12)
+  const [evDate, setEvDate] = useState(new Date().toISOString().split('T')[0])
+  const [evShift, setEvShift] = useState('night')
+  const [evEquipment, setEvEquipment] = useState('')
+
+  async function handleCSV(file, trackOverride) {
+    const targetTrack = trackOverride || (track === 'both' ? 'energy' : track)
     setCsvFile(file)
     setLoading(true)
     try {
-      const res = await uploadCSV(file, track === 'both' ? 'energy' : track)
+      const res = await uploadCSV(file, targetTrack)
       if (res.errors.length) {
         setCsvStatus({ msg: res.errors.join('; '), type: 'error' })
       } else {
         const uid = res.upload_id
         setCurrentUploadId(uid)
         setUploadId(uid)
-        setCsvStatus({ msg: `✓ ${res.rows_accepted} rows accepted. Upload ID: ${uid}`, type: 'success' })
+        setCsvStatus({ msg: `✓ [${targetTrack.toUpperCase()}] ${res.rows_accepted} rows accepted. Upload ID: ${uid}`, type: 'success' })
       }
     } catch (e) {
       setCsvStatus({ msg: `Upload failed: ${e.message}`, type: 'error' })
@@ -109,16 +114,20 @@ export default function UploadPage({ uploadId, setUploadId, track, setTrack }) {
 
   async function handleEvidence(file) {
     if (!currentUploadId) {
-      setEvidenceStatuses(prev => [...prev, { msg: 'Upload a CSV first to get an Upload ID.', type: 'error' }])
+      setEvidenceStatuses(prev => [...prev, { msg: 'Upload a CSV first to establish an Upload session.', type: 'error' }])
       return
     }
     try {
-      const res = await uploadEvidence(file, currentUploadId)
+      const res = await uploadEvidence(file, currentUploadId, {
+        date: evDate,
+        shift: evShift,
+        equipment: evEquipment.trim() || undefined,
+      })
       const warn = res.low_confidence_fields.length
         ? ` ⚠ Low confidence: ${res.low_confidence_fields.join(', ')}`
         : ''
       setEvidenceStatuses(prev => [...prev, {
-        msg: `✓ ${res.source_id} — ${file.name}${warn}`,
+        msg: `✓ ${res.source_id} (${evShift || 'any'} shift, ${evEquipment || 'general'}) — ${file.name}${warn}`,
         type: res.low_confidence_fields.length ? 'warn' : 'success'
       }])
     } catch (e) {
@@ -163,9 +172,50 @@ export default function UploadPage({ uploadId, setUploadId, track, setTrack }) {
       </div>
 
       {/* Evidence Upload */}
-      <div className="card">
-        <h2 className="font-semibold text-gray-800 mb-1">3. Inspection Sheets & Voice Notes</h2>
-        <p className="text-xs text-gray-400 mb-3">Upload after the CSV. Each file is processed by Nexus AI (vision/STT).</p>
+      <div className="card space-y-4">
+        <div>
+          <h2 className="font-semibold text-gray-800 mb-1">3. Inspection Sheets & Voice Notes</h2>
+          <p className="text-xs text-gray-400">
+            Upload observation records. Setting shift and equipment tags enables high-precision evidence linkage.
+          </p>
+        </div>
+
+        {/* Evidence Metadata Tagging */}
+        <div className="grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded-lg text-xs">
+          <div>
+            <label className="block text-gray-600 font-medium mb-1">Observation Date</label>
+            <input
+              type="date"
+              value={evDate}
+              onChange={e => setEvDate(e.target.value)}
+              className="w-full border rounded px-2 py-1.5 bg-white"
+            />
+          </div>
+          <div>
+            <label className="block text-gray-600 font-medium mb-1">Shift</label>
+            <select
+              value={evShift}
+              onChange={e => setEvShift(e.target.value)}
+              className="w-full border rounded px-2 py-1.5 bg-white"
+            >
+              <option value="day">Day (06:00 – 14:00)</option>
+              <option value="evening">Evening (14:00 – 22:00)</option>
+              <option value="night">Night (22:00 – 06:00)</option>
+              <option value="">Any / Not Shift-Specific</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-gray-600 font-medium mb-1">Equipment Name / Line</label>
+            <input
+              type="text"
+              value={evEquipment}
+              onChange={e => setEvEquipment(e.target.value)}
+              placeholder="e.g. Compressor AX-200, Line-1"
+              className="w-full border rounded px-2 py-1.5 bg-white"
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-4">
           <FileDropZone
             label="Inspection Sheets / Nameplates"
