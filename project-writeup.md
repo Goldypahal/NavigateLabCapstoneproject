@@ -33,7 +33,7 @@ ResourceLens is governed by three strict architectural mandates:
 ---
 
 ### 4. Verification, Testing & Robustness
-- **Unit & Hand-Calculation Verification:** 36 unit tests (`backend/tests/`) confirm 100% mathematical validity of energy baselines, water equations, and tariff calculations against manual hand-calculations.
-- **Evaluation Benchmark:** 15 test cases spanning normal runs, missing evidence, conflicting reports, degraded captures, and adversarial prompt injections (Categories A–F).
+- **Unit & Hand-Calculation Verification:** 52 comprehensive unit tests (`backend/tests/`) confirm 100% mathematical validity of energy baselines, water equations, tariff calculations, validation logic, review state machine, and post-fix verification against manual hand-calculations.
+- **Evaluation Benchmark:** 15 test cases spanning normal runs, missing evidence, conflicting reports, degraded captures, and adversarial prompt injections (Categories A–F) achieving 15/15 PASS (100.0%).
 - **Engineering Transparency:** 5 documented development mistakes logged in `AI_USAGE.md` detailing root cause discovery, code fixes, and regression prevention.
 
