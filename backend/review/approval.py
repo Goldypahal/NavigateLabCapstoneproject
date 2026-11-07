@@ -40,15 +40,18 @@ def apply_review_decision(db: Session, decision: ReviewDecision) -> Action:
         raise ValueError(f"Invalid decision: {decision.decision}")
 
     action.status = decision.decision
-    if decision.decision == "edited" and decision.edited_text:
-        action.edited_text = decision.edited_text
+    if decision.decision == "edited":
+        if decision.edited_text and decision.edited_text.strip():
+            action.edited_text = decision.edited_text.strip()
+        else:
+            action.edited_text = action.action_text  # fallback to original text instead of None
         action.status = "edited"
 
     approval = Approval(
         action_id=action.id,
         manager_name=decision.manager_name,
         decision=decision.decision,
-        edited_text=decision.edited_text,
+        edited_text=action.edited_text if decision.decision == "edited" else None,
         notes=decision.notes,
         decided_at=datetime.datetime.utcnow(),
     )
@@ -60,7 +63,7 @@ def apply_review_decision(db: Session, decision: ReviewDecision) -> Action:
 
 def get_approved_actions_text(db: Session, upload_id: str) -> str:
     """
-    Build the briefing text from approved/edited actions only.
+    Build the briefing text from approved/edited actions only for the given upload_id.
     Used as input to TTS. Never includes pending or rejected actions.
     """
     actions = (
@@ -68,6 +71,7 @@ def get_approved_actions_text(db: Session, upload_id: str) -> str:
         .join(Action.anomaly)
         .filter(
             Action.status.in_(["approved", "edited"]),
+            Action.anomaly.has(upload_id=upload_id),
         )
         .order_by(Action.priority_rank)
         .all()
