@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import Anomaly, Evidence, Explanation, Action, Reading
+from db.models import Anomaly, Evidence, Explanation, Action, Reading, Approval
 from calc.energy import run_energy_analysis
 from calc.water import run_water_analysis
 from calc.cost import estimate_energy_cost, estimate_water_cost, rank_actions_by_loss
@@ -60,6 +60,17 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
     if not readings:
         raise HTTPException(404, f"No readings found for upload_id={req.upload_id}")
 
+    # Clean up prior analysis results for this upload to prevent duplicates on rerun (Bug 9)
+    existing_anomalies = db.query(Anomaly).filter(Anomaly.upload_id == req.upload_id).all()
+    for ea in existing_anomalies:
+        existing_actions = db.query(Action).filter(Action.anomaly_id == ea.anomaly_id).all()
+        for act in existing_actions:
+            db.query(Approval).filter(Approval.action_id == act.id).delete()
+            db.delete(act)
+        db.query(Explanation).filter(Explanation.anomaly_id == ea.anomaly_id).delete()
+        db.delete(ea)
+    db.flush()
+
     evidence_rows = db.query(Evidence).filter(Evidence.upload_id == req.upload_id).all()
     evidence_store = _build_evidence_store(evidence_rows)
 
@@ -73,6 +84,13 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
 
         df = _readings_to_df(track_readings, track)
 
+        # Baseline across uploads: fetch prior historical readings for baseline (Bug 6)
+        hist_readings = db.query(Reading).filter(
+            Reading.track == track,
+            Reading.upload_id != req.upload_id
+        ).all()
+        historical_df = _readings_to_df(hist_readings, track) if hist_readings else None
+
         if track == "energy":
             analysis = run_energy_analysis(
                 df,
@@ -80,6 +98,7 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                 threshold_pct=req.threshold_pct,
                 sigma=req.sigma,
                 baseline_weeks=req.baseline_weeks,
+                historical_df=historical_df,
             )
             anomaly_list = analysis.anomalies
         else:
@@ -90,8 +109,14 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
             )
             anomaly_list = analysis.anomalies
 
+        if not anomaly_list:
+            continue
+
+        # Prepare anomaly summaries and persist DB anomalies
+        anom_summaries = []
+        anom_meta = {}
+
         for anom in anomaly_list:
-            # Compute cost
             if track == "energy":
                 cost_est = estimate_energy_cost(
                     anom.excess_kwh,
@@ -105,89 +130,145 @@ async def run_analysis(req: RunAnalysisRequest, db: Session = Depends(get_db)):
                 ts = anom.timestamp
                 shift = anom.shift
             else:
-                cost_est = estimate_water_cost(anom.excess_kl)
-                excess = anom.excess_kl
+                # Water cost uses total_loss_kl across event window (Bug 5)
+                cost_est = estimate_water_cost(anom.total_loss_kl)
+                excess = anom.total_loss_kl
                 actual = anom.unaccounted_kl
                 baseline = anom.baseline_unaccounted_kl
-                deviation_pct = round((anom.unaccounted_kl - anom.baseline_unaccounted_kl) / max(anom.baseline_unaccounted_kl, 0.01) * 100, 2)
+                # Prevent massive 60,000% on zero baseline (Bug 19)
+                if anom.baseline_unaccounted_kl > 0.5:
+                    deviation_pct = round((anom.unaccounted_kl - anom.baseline_unaccounted_kl) / anom.baseline_unaccounted_kl * 100, 2)
+                else:
+                    deviation_pct = 100.0 if anom.unaccounted_kl > 0 else 0.0
                 sigma_dev = None
                 ts = datetime.datetime.combine(anom.date, datetime.time())
                 shift = None
 
-            # Persist anomaly
-            existing = db.query(Anomaly).filter(Anomaly.anomaly_id == anom.anomaly_id).first()
-            if not existing:
-                db_anomaly = Anomaly(
-                    anomaly_id=anom.anomaly_id,
-                    upload_id=req.upload_id,
-                    track=track,
-                    timestamp=ts,
-                    shift=shift,
-                    weekday=ts.weekday() if ts else None,
-                    actual_value=actual,
-                    baseline_value=baseline,
-                    deviation_pct=deviation_pct,
-                    excess_value=excess,
-                    sigma_deviation=sigma_dev,
-                    estimated_cost=cost_est.total_cost,
-                    unaccounted_kl=anom.unaccounted_kl if track == "water" else None,
-                )
-                db.add(db_anomaly)
-                db.flush()
+            db_anomaly = Anomaly(
+                anomaly_id=anom.anomaly_id,
+                upload_id=req.upload_id,
+                track=track,
+                timestamp=ts,
+                shift=shift,
+                weekday=ts.weekday() if ts else None,
+                actual_value=actual,
+                baseline_value=baseline,
+                deviation_pct=deviation_pct,
+                excess_value=excess,
+                sigma_deviation=sigma_dev,
+                estimated_cost=cost_est.total_cost,
+                unaccounted_kl=anom.unaccounted_kl if track == "water" else None,
+            )
+            db.add(db_anomaly)
+            db.flush()
 
-            # LLM explain
-            anom_dict = {
+            anom_summaries.append({
                 "anomaly_id": anom.anomaly_id,
                 "track": track,
-                "timestamp": ts,
+                "timestamp": str(ts),
                 "shift": shift,
                 "deviation_pct": deviation_pct,
+            })
+            anom_meta[anom.anomaly_id] = {
+                "excess": excess,
+                "cost": cost_est.total_cost,
+                "track": track,
             }
-            explain_result = explain_anomaly_with_evidence(
-                anomaly=anom_dict,
-                evidence_store=evidence_store,
-                track=track,
-                model=req.model,
+            total_anomalies += 1
+
+        # Batched LLM Explanation: 1 call per upload to avoid timeouts and token ballooning (Bug 3)
+        from ai.explain import _sanitize_and_validate_llm_output, ExplainJSON
+        import nexus_client as nc
+
+        llm_batch_res = nc.explain_anomalies_batch(
+            anomalies_summary=anom_summaries,
+            evidence_snippets=evidence_store,
+            model=req.model,
+            track=track,
+        )
+
+        source_id_to_text = {e["source_id"]: e["text"] for e in evidence_store}
+
+        try:
+            parsed_batch = json.loads(llm_batch_res.content)
+            explanations_list = parsed_batch.get("explanations", [])
+        except Exception:
+            explanations_list = []
+
+        expl_by_id = {item.get("anomaly_id"): item for item in explanations_list if isinstance(item, dict)}
+
+        for anom in anomaly_list:
+            raw_item = expl_by_id.get(anom.anomaly_id) or {
+                "anomaly_id": anom.anomaly_id,
+                "track": track,
+                "likely_cause": "No conclusive worker log found for this period",
+                "cause_status": "unknown",
+                "evidence": [],
+                "missing_information": ["No corroborating operator note or inspection sheet"],
+                "conflicts": [],
+                "uncertainty_note": "Cause unknown: no equipment logs match this shift",
+                "recommended_actions": [],
+            }
+
+            try:
+                raw_item["track"] = track
+                raw_item["anomaly_id"] = anom.anomaly_id
+                ej = ExplainJSON(**raw_item)
+            except Exception:
+                ej = ExplainJSON(
+                    anomaly_id=anom.anomaly_id,
+                    track=track,
+                    likely_cause="Worker note verification pending",
+                    cause_status="unknown",
+                    evidence=[],
+                    missing_information=[],
+                    conflicts=[],
+                    uncertainty_note="Cause unknown",
+                    recommended_actions=[],
+                )
+
+            # Sanitize numbers and validate citations
+            cleaned_ej, is_valid, validation_errors = _sanitize_and_validate_llm_output(
+                ej, evidence_store, source_id_to_text
             )
 
-            # Persist explanation
-            if explain_result.explain_json:
-                ej = explain_result.explain_json
-                exp = Explanation(
-                    anomaly_id=anom.anomaly_id,
-                    model_used=explain_result.model_used,
-                    raw_json=explain_result.raw_json,
-                    likely_cause=ej.likely_cause,
-                    cause_status=ej.cause_status,
-                    uncertainty_note=ej.uncertainty_note,
-                    missing_information=json.dumps(ej.missing_information),
-                    conflicts=json.dumps(ej.conflicts),
-                    evidence_json=json.dumps([e.model_dump() for e in ej.evidence]),
-                    is_valid=explain_result.is_valid,
-                    validation_errors=json.dumps(explain_result.validation_errors),
-                    input_tokens=explain_result.input_tokens,
-                    output_tokens=explain_result.output_tokens,
-                )
-                db.add(exp)
-                db.flush()
+            exp = Explanation(
+                anomaly_id=anom.anomaly_id,
+                model_used=llm_batch_res.model,
+                raw_json=json.dumps(cleaned_ej.model_dump()),
+                likely_cause=cleaned_ej.likely_cause,
+                cause_status=cleaned_ej.cause_status,
+                uncertainty_note=cleaned_ej.uncertainty_note,
+                missing_information=json.dumps(cleaned_ej.missing_information),
+                conflicts=json.dumps(cleaned_ej.conflicts),
+                evidence_json=json.dumps([e.model_dump() for e in cleaned_ej.evidence]),
+                is_valid=is_valid,
+                validation_errors=json.dumps(validation_errors),
+                input_tokens=llm_batch_res.input_tokens // max(1, len(anomaly_list)),
+                output_tokens=llm_batch_res.output_tokens // max(1, len(anomaly_list)),
+            )
+            db.add(exp)
+            db.flush()
 
-                # Create actions (code ranks them)
-                action_dicts = []
-                for ra in ej.recommended_actions:
-                    action_dicts.append({
-                        "anomaly_id": anom.anomaly_id,
-                        "action_text": ra.action,
-                        "equipment": ra.equipment,
-                        "urgency": ra.urgency,
-                        "estimated_loss": excess,
-                        "estimated_cost": cost_est.total_cost,
-                        "evidence_source_ids": json.dumps([e.source_id for e in ej.evidence]),
-                    })
+            meta = anom_meta[anom.anomaly_id]
+            action_dicts = []
+            for ra in cleaned_ej.recommended_actions:
+                action_dicts.append({
+                    "anomaly_id": anom.anomaly_id,
+                    "action_text": ra.action,
+                    "equipment": ra.equipment,
+                    "urgency": ra.urgency,
+                    "estimated_loss": meta["excess"],
+                    "estimated_cost": meta["cost"],
+                    "evidence_source_ids": json.dumps([e.source_id for e in cleaned_ej.evidence]),
+                })
 
-                action_dicts = rank_actions_by_loss(action_dicts, track)
-                for ad in action_dicts:
-                    db.add(Action(**{k: v for k, v in ad.items() if k != "anomaly_id"},
-                                 anomaly_id=ad["anomaly_id"]))
+            ranked = rank_actions_by_loss(action_dicts, track)
+            for ad in ranked:
+                db.add(Action(**ad))
+
+    db.commit()
+    return {"message": f"Analysis complete. {total_anomalies} anomalies found.", "upload_id": req.upload_id}
 
             total_anomalies += 1
 

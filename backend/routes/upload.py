@@ -163,9 +163,14 @@ async def upload_evidence(
 
     source_id = _next_source_id(db, evidence_type)
 
-    # Save file to disk
-    safe_name = f"{source_id}_{file.filename}"
-    save_path = UPLOAD_DIR / safe_name
+    # Sanitize filename against path traversal attacks (e.g. ../../etc/passwd)
+    clean_filename = Path(file.filename or f"evidence_{source_id}").name
+    clean_filename = "".join(c for c in clean_filename if c.isalnum() or c in "._- ")
+    safe_name = f"{source_id}_{clean_filename}"
+    save_path = (UPLOAD_DIR / safe_name).resolve()
+    if not str(save_path).startswith(str(UPLOAD_DIR.resolve())):
+        raise HTTPException(400, "Invalid filename: path traversal attempt blocked")
+
     async with aiofiles.open(save_path, "wb") as f:
         await f.write(content)
 
